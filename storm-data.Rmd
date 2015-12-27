@@ -1,21 +1,155 @@
 ---
-title: "Working Title"
+title: "Population Health and Economic Impact of Storms"
 author: "clesiemo3"
 date: "December 26, 2015"
 output: html_document
 ---
 
+Synopsis: Storm Data from the U.S. National Oceanic and Atmospheric Adiministration (NOAA) provides insight into the impact of storms across the United States. In this analysis the impacts to population health and economics are explored for different types of events and the type of damage they caused.
+
+##Package Loading##
+
 ```{r package-load, message=F}
 #library loads
 library(R.utils) #for bunzip2()
 library(data.table) #for fread()
+library(dplyr) #for grouping stats
+library(reshape) #for data manipulation
+library(ggplot2) #for gfx
 ```
 
+##Data Processing##
 
-```{r load-data, cache=T}
+Data was downloaded using the `download.file()` function, unzipped through `bunzip2()` and then read into R with the `fread()` function due to its high performance.
+
+```{r load-data, cache=T, message=F, warning=F}
 #this entire chunk is cached due to long download and processing times.
 download.file("http://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2","storm-data.csv.bz2")
 bzz <- bunzip2("storm-data.csv.bz2",remove=F,skip=T) #does not remove source file and skips the unzip if already exists.
-stormData <- fread("storm-data.csv",showProgress=F) #fread makes the file size and load time managable. No need to show progress for a static document
+stormData <- fread("storm-data.csv",showProgress=F,nrows=902297) #fread makes the file size and load time managable. No need to show progress for a static document
 ```
 
+Data is grouped by Event Type (EVTYPE) in order to assess which types of events are most harmful to population health and which events have the greatest economic consequences.
+
+###Population Health Impact###
+
+The Population Health Impact Score is calculated by the sum of fatalities times 10 plus the sum of injuries. This provides a weighting to fatalities as having a much larger impact than injuries. You can adjust this weight in the code below (e.g. fatalWeight = 1 would treat the variables as equals). However, this may also require adjusting the breaks value in any plots where the data is used depending on the order of magnitude of the change.
+
+```{r processing-pop-health}
+fatalWeight = 10 #the weighting of fatality compared to injury can be set here.
+#data is grouped and then summarized using the dplyr package.
+stormGroup <- stormData %>% group_by(EVTYPE) %>% summarize(fatality = sum(FATALITIES),injury = sum(INJURIES))
+stormPopHealth <- stormGroup %>% group_by(EVTYPE) %>% summarize(popImpact = sum(fatality*fatalWeight+injury))
+
+#data is arranged by impact descending to provide the top 10 most impactful event types for use in graphing.
+stormPopHealth <- arrange(stormPopHealth, desc(popImpact))
+topTen <- stormPopHealth[1:10,]
+ttEVTYPE <- factor(topTen$EVTYPE,levels=unique(topTen$EVTYPE))
+
+#data is melted into fatalities and injuries so that we can distinguish between them by color in our graph
+stormMelt <- melt(stormGroup[stormGroup$EVTYPE %in% as.character(ttEVTYPE),],id.vars="EVTYPE")
+
+#adjust our fatality values by our fatalWeight factor
+stormMelt[stormMelt$variable=="fatality",]$value <- stormMelt[stormMelt$variable=="fatality",]$value*fatalWeight
+#Save our graphing variables into unique names so the generics above can be reused.
+#factor used for giving a proper descending order in our graph
+phiFactor <- factor(stormMelt$EVTYPE,levels=unique(topTen$EVTYPE))
+#melted variable names
+phiVar <- stormMelt$variable
+#values themselves
+phiValue <- stormMelt$value
+```
+
+###Property Damage Impact###
+
+A similar process is performed for property damage. The main difference in terms of processing is getting the values in a comparable state rather than described by the EXP variables for whether they are in thousands, millions, billions or 'as-is'. Also, while unused in the economic impact section, a variable similar to `fatalWeight` could be used to weight crop or property heavier depending on which was of more concern to the reader. 
+
+```{r processing-econimic-impact}
+#data first needs to be filtered from buffer overflow and other errors in the damage exponent section. 
+#k/K, m/M, and b/B for Thousand, Million, and Billion are considered acceptable as per source documentation:
+#"Estimates should be rounded to three significant digits, followed by an alphabetical character signifying the magnitude of the number, 
+#i.e., 1.55B for $1,550,000,000. 
+#Alphabetical characters used to signify magnitude include “K” for thousands, “M” for millions, and “B” for billions." 
+#source: https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf
+
+#slim down the data a little for just what we need
+stormData <- select(stormData,EVTYPE,PROPDMG,PROPDMGEXP,CROPDMG,CROPDMGEXP)
+
+expTypes <- c("0","k","m","b","") #empty string for <$1000 values
+#use tolower to account for case differences
+stormData <- stormData[tolower(stormData$PROPDMGEXP) %in% expTypes,]
+stormData <- stormData[tolower(stormData$CROPDMGEXP) %in% expTypes,]
+
+#regex to swap empty strings for 0s
+stormData$PROPDMGEXP <- gsub("^$","0",stormData$PROPDMGEXP)
+stormData$CROPDMGEXP <- gsub("^$","0",stormData$CROPDMGEXP)
+
+#get actuals for property damage
+exponent <- c("0" = 1,
+              "k" = 1000,
+              "m" = 1000000,
+              "b" = 1000000000
+              )
+stormData$PROPDMGEXP <- tolower(stormData$PROPDMGEXP)
+stormData$CROPDMGEXP <- tolower(stormData$CROPDMGEXP)
+
+stormData$propActual <- stormData$PROPDMG * as.numeric(exponent[stormData$PROPDMGEXP])
+stormData$cropActual <- stormData$CROPDMG * as.numeric(exponent[stormData$CROPDMGEXP])
+
+#data is grouped and then summarized using the dplyr package.
+stormGroup <- stormData %>% group_by(EVTYPE) %>% summarize(property = sum(propActual),crop = sum(cropActual))
+stormEcon <- stormGroup %>% group_by(EVTYPE) %>% summarize(propImpact = sum(property+crop))
+
+#data is arranged by impact descending to provide the top 10 most impactful event types for use in graphing.
+stormEcon <- arrange(stormEcon, desc(propImpact))
+topTen <- stormEcon[1:10,]
+ttEVTYPE <- factor(topTen$EVTYPE,levels=unique(topTen$EVTYPE))
+
+#data is melted into fatalities and injuries so that we can distinguish between them by color in our graph
+stormMelt <- melt(stormGroup[stormGroup$EVTYPE %in% as.character(ttEVTYPE),],id.vars="EVTYPE")
+
+#If necessary this can be uncommented for weighting purposes.
+#adjust our values by our propertyWeight factor
+#stormMelt[stormMelt$variable=="property",]$value <- stormMelt[stormMelt$variable=="property",]$value*propertyWeight
+
+#factor used for giving a proper descending order in our graph
+econFactor <- factor(stormMelt$EVTYPE,levels=unique(topTen$EVTYPE))
+#melted variable names
+econVar <- stormMelt$variable
+#values themselves
+econValue <- stormMelt$value
+```
+
+##Results##
+
+The ggplot2 package is utilized for fine control over various aspects of the graph such as adding titled axis labels, extra breaks in the y axis, or colored segments based upon the source of the number.
+
+Population Health Impact can be seen with the below graph based upon the Population Health Impact (PHI) Score calculated above 
+
+```{r analytics-results-pop-health}
+#plot the data using ggplot to provide control over small details. The X axis is tilted slightly to provide enough room for the full strings.
+ggplot() +
+    geom_bar(aes(phiFactor,phiValue,fill=phiVar),stat="identity") +
+    labs(title="Population Health Impact (PHI) Score for the Top 10 Event Types"
+        ,x="Event Type"
+        ,y="PHI Score"
+        ,fill="Type of Impact"
+        ) +
+    theme(axis.text.x = element_text(angle=30,hjust=1)) +
+    scale_y_continuous(breaks=round(seq(0,sum(phiValue),by=12500),0))
+```
+
+Economic Impact can be seen with the below graph based upon the impact in terms of USD ($) calculated above.
+
+```{r analytics-results-econ}
+#plot the data using ggplot to provide control over small details. The X axis is tilted slightly to provide enough room for the full strings.
+ggplot() +
+    geom_bar(aes(econFactor,econValue/1e9,fill=econVar),stat="identity") +
+    labs(title="Economic Impact for the Top 10 Event Types"
+        ,x="Event Type"
+        ,y="Damage in Billions of Dollars ($B)"
+        ,fill="Type of Impact"
+        ) +
+    theme(axis.text.x = element_text(angle=30,hjust=1)) +
+    scale_y_continuous(breaks=round(seq(0,sum(econValue)/1e9,by=25),0))
+```
