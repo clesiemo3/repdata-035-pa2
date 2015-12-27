@@ -1,0 +1,21 @@
+---
+title: "Working Title"
+author: "clesiemo3"
+date: "December 26, 2015"
+output: html_document
+---
+
+```{r package-load, message=F}
+#library loads
+library(R.utils) #for bunzip2()
+library(data.table) #for fread()
+```
+
+
+```{r load-data, cache=T}
+#this entire chunk is cached due to long download and processing times.
+download.file("http://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2","storm-data.csv.bz2")
+bzz <- bunzip2("storm-data.csv.bz2",remove=F,skip=T) #does not remove source file and skips the unzip if already exists.
+stormData <- fread("storm-data.csv",showProgress=F) #fread makes the file size and load time managable. No need to show progress for a static document
+```
+
